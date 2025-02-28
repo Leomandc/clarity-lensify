@@ -6,9 +6,19 @@
 (define-constant err-not-found (err u101))
 (define-constant err-unauthorized (err u102))
 (define-constant err-already-registered (err u103))
+(define-constant err-invalid-expiry (err u104))
+(define-constant err-license-expired (err u105))
 
 ;; Define NFT
 (define-non-fungible-token photo-copyright uint)
+
+;; Events
+(define-trait photo-event-trait
+  ((emit-photo-registered (uint principal (string-utf8 64)) (response bool uint))
+   (emit-copyright-transferred (uint principal principal) (response bool uint))
+   (emit-license-granted (uint principal uint) (response bool uint))
+   (emit-license-revoked (uint principal) (response bool uint)))
+)
 
 ;; Data structures
 (define-map photos
@@ -34,6 +44,14 @@
 
 ;; Data variables
 (define-data-var last-photo-id uint u0)
+
+;; Helper functions
+(define-private (is-license-valid (photo-id uint) (licensee principal))
+  (match (map-get? licenses { photo-id: photo-id, licensee: licensee })
+    license (> (get expires license) block-height)
+    false
+  )
+)
 
 ;; Public functions
 (define-public (register-photo 
@@ -79,6 +97,7 @@
   (let
     ((photo (unwrap! (map-get? photos photo-id) (err err-not-found))))
     (asserts! (is-eq tx-sender (get owner photo)) (err err-unauthorized))
+    (asserts! (> expires block-height) (err err-invalid-expiry))
     (ok (map-set licenses 
       { photo-id: photo-id, licensee: licensee }
       {
@@ -89,11 +108,30 @@
   )
 )
 
+(define-public (revoke-license
+  (photo-id uint)
+  (licensee principal))
+  (let
+    ((photo (unwrap! (map-get? photos photo-id) (err err-not-found))))
+    (asserts! (is-eq tx-sender (get owner photo)) (err err-unauthorized))
+    (ok (map-delete licenses { photo-id: photo-id, licensee: licensee }))
+  )
+)
+
 ;; Read only functions
 (define-read-only (get-photo-details (photo-id uint))
   (ok (map-get? photos photo-id))
 )
 
 (define-read-only (get-license-details (photo-id uint) (licensee principal))
-  (ok (map-get? licenses { photo-id: photo-id, licensee: licensee }))
+  (let
+    ((license (map-get? licenses { photo-id: photo-id, licensee: licensee })))
+    (asserts! (not (is-none license)) (err err-not-found))
+    (asserts! (is-license-valid photo-id licensee) (err err-license-expired))
+    (ok license)
+  )
+)
+
+(define-read-only (check-license-validity (photo-id uint) (licensee principal))
+  (ok (is-license-valid photo-id licensee))
 )
